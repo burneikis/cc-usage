@@ -5,11 +5,30 @@
  * Reads OAuth tokens from ~/.claude/.credentials.json (same store Claude Code uses),
  * auto-refreshes when expired, and polls https://api.anthropic.com/api/oauth/usage
  * every 30s with live progress bars.
+ *
+ * Headless / status-bar flags:
+ *   --headless          Fetch once, print a compact single line, exit.
+ *   --format=plain      (default) Plain text, no ANSI codes.
+ *   --format=i3blocks   Three-line output: full / short / #RRGGBB — for i3blocks.
+ *   --format=json       Raw usage JSON from the API.
+ *
+ * Exit codes in headless mode:
+ *   0  — all limits below 80 %
+ *   1  — at least one limit ≥ 80 %
+ *   2  — at least one limit ≥ 95 %
  */
 
 import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+
+// ─── CLI args ────────────────────────────────────────────────────────────────
+const ARGS     = process.argv.slice(2)
+const HEADLESS = ARGS.includes('--headless')
+const FORMAT   = (() => {
+  const f = ARGS.find(a => a.startsWith('--format='))
+  return f ? f.split('=')[1] : 'plain'
+})()
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 30_000
@@ -194,6 +213,120 @@ function render(data, lastUpdated, status) {
   return lines.join('\n')
 }
 
+// ─── Headless rendering ─────────────────────────────────────────────────────
+
+/** Returns the worst utilization pct across all active limits (0-100). */
+function worstPct(data) {
+  const vals = [
+    data.five_hour?.utilization,
+    data.seven_day?.utilization,
+    data.seven_day_sonnet?.utilization,
+    data.extra_usage?.is_enabled ? data.extra_usage?.utilization : null,
+  ].filter(v => typeof v === 'number')
+  return vals.length ? Math.max(...vals) : 0
+}
+
+/** Exit code based on worst utilisation pct. */
+function exitCodeFor(pct) {
+  if (pct >= 95) return 2
+  if (pct >= 80) return 1
+  return 0
+}
+
+/** #RRGGBB hex color matching the TUI colour logic. */
+function hexColorForPct(pct) {
+  if (pct < 50) return '#00cc44'   // green
+  if (pct < 80) return '#ffaa00'   // yellow
+  return '#ff3333'                  // red
+}
+
+/** Compact label + pct for one limit, e.g. "5h:42%". */
+function fmtLimit(label, limit) {
+  if (!limit || limit.utilization === null) return null
+  return `${label}:${Math.floor(limit.utilization)}%`
+}
+
+/** Build the parts array used by both plain and i3blocks formatters. */
+function buildParts(data) {
+  const parts = [
+    fmtLimit('5h',  data.five_hour),
+    fmtLimit('7d',  data.seven_day),
+    fmtLimit('snt', data.seven_day_sonnet),
+  ].filter(Boolean)
+
+  if (data.extra_usage?.is_enabled) {
+    if (data.extra_usage.monthly_limit === null) {
+      parts.push('extra:∞')
+    } else if (typeof data.extra_usage.utilization === 'number') {
+      parts.push(`extra:${Math.floor(data.extra_usage.utilization)}%`)
+    }
+  }
+
+  return parts
+}
+
+function renderHeadlessPlain(data) {
+  if (!data) return 'CC: no data'
+  const parts = buildParts(data)
+  if (parts.length === 0) return 'CC: no subscription'
+  return `CC: ${parts.join(' | ')}`
+}
+
+function renderHeadlessI3blocks(data) {
+  if (!data) {
+    return ['CC: no data', 'CC: n/a', '#888888'].join('\n')
+  }
+  const parts = buildParts(data)
+  if (parts.length === 0) {
+    return ['CC: no subscription', 'CC: —', '#888888'].join('\n')
+  }
+  const full  = `CC: ${parts.join(' | ')}`
+  // Short text: only the highest-utilisation limit
+  const worst = [
+    { label: '5h',  u: data.five_hour?.utilization },
+    { label: '7d',  u: data.seven_day?.utilization },
+    { label: 'snt', u: data.seven_day_sonnet?.utilization },
+  ]
+    .filter(x => typeof x.u === 'number')
+    .sort((a, b) => b.u - a.u)[0]
+  const short = worst ? `CC ${worst.label}:${Math.floor(worst.u)}%` : 'CC'
+  const color = hexColorForPct(worstPct(data))
+  return [full, short, color].join('\n')
+}
+
+async function runHeadless() {
+  let tokens = loadTokens()
+
+  if (isExpired(tokens)) {
+    try { tokens = await refreshTokens(tokens) }
+    catch (err) {
+      process.stderr.write(`cc-usage: token refresh failed: ${err.message}\n`)
+      process.exit(3)
+    }
+  }
+
+  let data
+  try {
+    data = await fetchUsage(tokens)
+  } catch (err) {
+    process.stderr.write(`cc-usage: fetch failed: ${err.message}\n`)
+    process.exit(3)
+  }
+
+  if (FORMAT === 'json') {
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n')
+    process.exit(0)
+  }
+
+  if (FORMAT === 'i3blocks') {
+    process.stdout.write(renderHeadlessI3blocks(data) + '\n')
+  } else {
+    process.stdout.write(renderHeadlessPlain(data) + '\n')
+  }
+
+  process.exit(exitCodeFor(worstPct(data)))
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   let tokens      = loadTokens()
@@ -263,4 +396,8 @@ async function main() {
   process.on('SIGTERM', () => { cleanup(); process.exit(0) })
 }
 
-main().catch(err => { console.error(err); process.exit(1) })
+if (HEADLESS) {
+  runHeadless().catch(err => { console.error(err); process.exit(3) })
+} else {
+  main().catch(err => { console.error(err); process.exit(1) })
+}
