@@ -233,11 +233,11 @@ function exitCodeFor(pct) {
   return 0
 }
 
-/** #RRGGBB hex color matching the TUI colour logic. */
+/** #RRGGBB hex color matching the TUI colour logic (Nord palette). */
 function hexColorForPct(pct) {
-  if (pct < 50) return '#00cc44'   // green
-  if (pct < 80) return '#ffaa00'   // yellow
-  return '#ff3333'                  // red
+  if (pct < 50) return '#A3BE8C'   // Nord14 green
+  if (pct < 80) return '#EBCB8B'   // Nord13 yellow
+  return '#BF616A'                  // Nord11 red
 }
 
 /** Compact label + pct for one limit, e.g. "5h:42%". */
