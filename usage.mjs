@@ -30,7 +30,21 @@ const FORMAT = (() => {
   return f ? f.split("=")[1] : "plain";
 })();
 
-// ─── Config ──────────────────────────────────────────────────────────────────
+// ─── Locale ──────────────────────────────────────────────────────────────────
+// Convert POSIX locale (e.g. en_AU.UTF-8) to BCP-47 (e.g. en-AU).
+// Falls back to 'en' if the resolved locale is 'und' (unknown to Node's ICU).
+const LOCALE = (() => {
+  const raw = process.env.LC_TIME || process.env.LC_ALL || process.env.LANG || "";
+  const bcp = raw.replace(/\..*$/, "").replace("_", "-");
+  try {
+    const resolved = new Intl.DateTimeFormat(bcp).resolvedOptions().locale;
+    return resolved === "und" ? "en" : bcp || "en";
+  } catch {
+    return "en";
+  }
+})();
+
+// ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 60_000;
 const API_URL = "https://api.anthropic.com/api/oauth/usage";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
@@ -154,8 +168,8 @@ function formatResetAt(isoStr) {
   const parts = [];
   if (h > 0) parts.push(`${h}h`);
   parts.push(`${m}m`);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const day = d.toLocaleDateString([], {
+  const time = d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
+  const day = d.toLocaleDateString(LOCALE, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -191,7 +205,7 @@ function renderExtraUsage(extra) {
   const pct = Math.floor(extra.utilization);
   const color = colorForPct(pct);
   const bar = progressBar(extra.utilization / 100);
-  const resetStr = `  ${DIM}resets ${reset.toLocaleDateString([], { month: "short", day: "numeric" })}${R}`;
+  const resetStr = `  ${DIM}resets ${reset.toLocaleDateString(LOCALE, { month: "short", day: "numeric" })}${R}`;
   return `${BOLD}Extra usage${R}\n${bar} ${color}${pct}% used${R}  ${DIM}$${used} / $${limit}${R}${resetStr}`;
 }
 
@@ -229,7 +243,7 @@ function render(data, lastUpdated, status) {
 
   lines.push(DIM + "─".repeat(60) + R);
   const timeStr = lastUpdated
-    ? new Date(lastUpdated).toLocaleTimeString()
+    ? new Date(lastUpdated).toLocaleTimeString(LOCALE)
     : "—";
   lines.push(
     `${DIM}Updated: ${timeStr}  ·  auto-refresh every ${POLL_INTERVAL_MS / 1000}s  ·  [r] refresh  ·  [q/Ctrl+C] quit${R}`,

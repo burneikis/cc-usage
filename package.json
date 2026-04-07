@@ -1,0 +1,9 @@
+{
+  "name": "cc-usage",
+  "version": "1.0.0",
+  "description": "Live-updating Claude Code usage monitor",
+  "type": "module",
+  "bin": {
+    "cc-usage": "./usage.mjs"
+  }
+}
