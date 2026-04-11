@@ -18,9 +18,10 @@
  *   2  — at least one limit ≥ 95 %
  */
 
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
+import { execFileSync } from "child_process";
 
 // ─── CLI args ────────────────────────────────────────────────────────────────
 const ARGS = process.argv.slice(2);
@@ -52,12 +53,64 @@ const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CREDS_PATH = join(homedir(), ".claude", ".credentials.json");
 const BAR_WIDTH = 40;
 
+// ─── macOS Keychain helpers ──────────────────────────────────────────────────
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const IS_MACOS = process.platform === "darwin";
+
+function readCredsFromKeychain() {
+  const account = userInfo().username;
+  const raw = execFileSync(
+    "security",
+    ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
+    { encoding: "utf8" },
+  ).trim();
+  // `security -w` returns data as a lowercase hex string when it contains
+  // newlines or other non-printable bytes (e.g. after keytar writes it), or
+  // as plain text with literal \n escape sequences (how Claude Code stores it).
+  let json;
+  if (/^[0-9a-f]+$/i.test(raw)) {
+    json = Buffer.from(raw, "hex").toString("utf8");
+  } else {
+    json = raw.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+  }
+  return JSON.parse(json);
+}
+
+function writeCredsToKeychain(creds) {
+  const account = userInfo().username;
+  // Use compact JSON (no newlines) so `security -w` returns it as plain text
+  const json = JSON.stringify(creds);
+  // Delete then re-add so we can update the password atomically
+  try {
+    execFileSync("security", [
+      "delete-generic-password",
+      "-s", KEYCHAIN_SERVICE,
+      "-a", account,
+    ], { stdio: "ignore" });
+  } catch { /* ignore if not found */ }
+  execFileSync("security", [
+    "add-generic-password",
+    "-s", KEYCHAIN_SERVICE,
+    "-a", account,
+    "-w", json,
+    "-U",
+  ]);
+}
+
 // ─── Token management ────────────────────────────────────────────────────────
 function readCreds() {
+  // On macOS, prefer keychain; fall back to file if present
+  if (IS_MACOS && !existsSync(CREDS_PATH)) {
+    return readCredsFromKeychain();
+  }
   return JSON.parse(readFileSync(CREDS_PATH, "utf8"));
 }
 
 function writeCreds(creds) {
+  if (IS_MACOS && !existsSync(CREDS_PATH)) {
+    writeCredsToKeychain(creds);
+    return;
+  }
   writeFileSync(CREDS_PATH, JSON.stringify(creds, null, 2), "utf8");
 }
 
