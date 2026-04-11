@@ -8,9 +8,10 @@
  *
  * Headless / status-bar flags:
  *   --headless          Fetch once, print a compact single line, exit.
+ *   --raw               Fetch once, print raw JSON response from the API, exit.
  *   --format=plain      (default) Plain text, no ANSI codes.
  *   --format=i3blocks   Three-line output: full / short / #RRGGBB — for i3blocks.
- *   --format=json       Raw usage JSON from the API.
+ *   --format=json       Raw usage JSON from the API (headless mode).
  *
  * Exit codes in headless mode:
  *   0  — all limits below 80 %
@@ -26,6 +27,7 @@ import { execFileSync } from "child_process";
 // ─── CLI args ────────────────────────────────────────────────────────────────
 const ARGS = process.argv.slice(2);
 const HEADLESS = ARGS.includes("--headless");
+const RAW = ARGS.includes("--raw");
 const FORMAT = (() => {
   const f = ARGS.find((a) => a.startsWith("--format="));
   return f ? f.split("=")[1] : "plain";
@@ -496,7 +498,31 @@ async function main() {
   });
 }
 
-if (HEADLESS) {
+if (RAW) {
+  (async () => {
+    let tokens = loadTokens();
+    if (isExpired(tokens)) {
+      try {
+        tokens = await refreshTokens(tokens);
+      } catch (err) {
+        process.stderr.write(`cc-usage: token refresh failed: ${err.message}\n`);
+        process.exit(3);
+      }
+    }
+    let data;
+    try {
+      data = await fetchUsage(tokens);
+    } catch (err) {
+      process.stderr.write(`cc-usage: fetch failed: ${err.message}\n`);
+      process.exit(3);
+    }
+    process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+    process.exit(0);
+  })().catch((err) => {
+    console.error(err);
+    process.exit(3);
+  });
+} else if (HEADLESS) {
   runHeadless().catch((err) => {
     console.error(err);
     process.exit(3);
