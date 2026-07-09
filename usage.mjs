@@ -243,6 +243,21 @@ function renderLimitBar(label, limit) {
   return `${BOLD}${label}${R}\n${bar} ${color}${pct}% used${R}${resetStr}`;
 }
 
+/** Scoped limits (e.g. per-model like "Fable") from data.limits[]. */
+function scopedLimits(data) {
+  return (data?.limits ?? []).filter(
+    (l) => l.kind === "weekly_scoped" && l.scope?.model?.display_name,
+  );
+}
+
+function renderScopedLimitBar(l) {
+  const name = l.scope.model.display_name;
+  return renderLimitBar(`Current week — ${name} only  (7-day window)`, {
+    utilization: l.percent,
+    resets_at: l.resets_at,
+  });
+}
+
 function renderExtraUsage(extra) {
   if (!extra?.is_enabled) return null;
   if (extra.monthly_limit === null) {
@@ -286,6 +301,7 @@ function render(data, lastUpdated, status) {
         "Current week — Sonnet only  (7-day window)",
         data.seven_day_sonnet,
       ),
+      ...scopedLimits(data).map(renderScopedLimitBar),
       renderExtraUsage(data.extra_usage),
     ].filter(Boolean);
 
@@ -314,6 +330,7 @@ function worstPct(data) {
     data.five_hour?.utilization,
     data.seven_day?.utilization,
     data.seven_day_sonnet?.utilization,
+    ...scopedLimits(data).map((l) => l.percent),
     data.extra_usage?.is_enabled ? data.extra_usage?.utilization : null,
   ].filter((v) => typeof v === "number");
   return vals.length ? Math.max(...vals) : 0;
@@ -345,6 +362,9 @@ function buildParts(data) {
     fmtLimit("5h", data.five_hour),
     fmtLimit("7d", data.seven_day),
     fmtLimit("snt", data.seven_day_sonnet),
+    ...scopedLimits(data).map((l) =>
+      fmtLimit(l.scope.model.display_name.toLowerCase(), { utilization: l.percent }),
+    ),
   ].filter(Boolean);
 
   if (data.extra_usage?.is_enabled) {
@@ -379,6 +399,10 @@ function renderHeadlessI3blocks(data) {
     { label: "5h", u: data.five_hour?.utilization },
     { label: "7d", u: data.seven_day?.utilization },
     { label: "snt", u: data.seven_day_sonnet?.utilization },
+    ...scopedLimits(data).map((l) => ({
+      label: l.scope.model.display_name.toLowerCase(),
+      u: l.percent,
+    })),
   ]
     .filter((x) => typeof x.u === "number")
     .sort((a, b) => b.u - a.u)[0];
